@@ -1,12 +1,15 @@
-FROM python:3.10-slim
-
-# Increase timeout for large wheels like torch
-ENV PIP_DEFAULT_TIMEOUT=1000
+# ===============================
+# Stage 1: Build stage
+# ===============================
+FROM python:3.10-slim AS build
 
 # Set working directory
 WORKDIR /app
 
-# Install system packages (needed for PyTorch & scientific libs)
+# Increase timeout for large wheels like PyTorch
+ENV PIP_DEFAULT_TIMEOUT=1000
+
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libopenblas-dev \
@@ -14,26 +17,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------------------------------
-# Preinstall PyTorch (CPU version here)
-# ------------------------------------------------------
-RUN pip install --no-cache-dir --upgrade typing-extensions
-RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
-
-# Copy requirements first (for caching)
+# Copy only requirements for caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Python dependencies including PyTorch
+RUN pip install --no-cache-dir --upgrade typing-extensions && \
+    pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt && \
+    find /root/.cache/pip -type f -delete
 
 # Copy app code
 COPY . .
 
-# Expose Streamlit's default port
+# ===============================
+# Stage 2: Runtime stage
+# ===============================
+FROM python:3.10-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy only Python site-packages (exclude unnecessary binaries)
+COPY --from=build /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+
+# Copy app code
+COPY --from=build /app /app
+
+# Expose Streamlit port
 EXPOSE 8502
 
-# Start the Streamlit app
+# Start Streamlit app
 CMD ["streamlit", "run", "app.py", \
-     "--server.enableCORS", "false", \
-     "--server.enableXsrfProtection", "false", \
-     "--server.headless", "true", \
-     "--server.port", "8502", \
-     "--server.address", "0.0.0.0"]
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false", \
+     "--server.headless=true", \
+     "--server.port=8502", \
+     "--server.address=0.0.0.0"]
